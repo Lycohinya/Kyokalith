@@ -56,9 +56,9 @@
 
 > 🔴 **`dirty_flush_interval_ticks` 是紅線,兩邊都不能亂調。**
 >
-> 寫回任務跑在**同步排程**上(Folia 上是 global region 排程),每次 flush 對每個待寫區塊開一條新的 JDBC 連線做 `INSERT OR REPLACE`(沒有連線池)。
+> 寫回任務跑在**非同步排程**上(1.4.2 起;Folia 上是 AsyncScheduler),一輪待寫區塊共用一條 JDBC 連線與一個 transaction 做批次 `INSERT OR REPLACE`。這輪工作完全不碰 Bukkit API,寫入路徑(flush / flushAll / clearEpoch)由 store 自己的鎖互斥,`onDisable` 的最後一次 flush 會等進行中的那輪跑完。
 >
-> - **調太小(例如 `1`)**:等於每 tick 在一條 ticking 執行緒上寫 SQLite。小於 `1` 會被夾成 `1`。
+> - **調太小(例如 `1`)**:每 tick 一次 SQLite 批次寫入,雖然不在 ticking 執行緒上,磁碟與鎖的壓力仍然是實打實的。小於 `1` 會被夾成 `1`。
 > - **調太大**:當機時遺失的 dirty 位置變多——而遺失 dirty 旗標**是正確性/漏洞問題**,不只是資料掉了:被玩家蓋住的方塊會重新變成「可首次曝光解析」,蓋起來再挖開的漏洞就回來了。
 >
 > 預設 40 是兩邊之間的平衡點,除非你知道自己在做什麼,不要動。

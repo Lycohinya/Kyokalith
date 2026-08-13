@@ -57,4 +57,16 @@ object Schedulers {
         val id = Bukkit.getScheduler().scheduleSyncRepeatingTask(plugin, task, d, p)
         return { Bukkit.getScheduler().cancelTask(id) }
     }
+
+    /**
+     * 純 I/O、不碰任何 Bukkit API 的週期工作用這個(目前只有 dirty positions 落地)。
+     * 週期單位一律是 tick,與 [globalTimer] 一致;Folia 的 AsyncScheduler 吃時間單位,由橋接層換算。
+     */
+    fun asyncTimer(plugin: Plugin, delay: Long, period: Long, task: Runnable): () -> Unit {
+        val d = delay.coerceAtLeast(1L)
+        val p = period.coerceAtLeast(1L)
+        if (isFolia) return FoliaSchedulers.asyncTimer(plugin, d, p, task)
+        val handle = Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, task, d, p)
+        return { handle.cancel() }
+    }
 }

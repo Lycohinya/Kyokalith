@@ -13,6 +13,25 @@ class KyokalithDatabase(private val file: File) {
 
     fun connect(): Connection = DriverManager.getConnection("jdbc:sqlite:${file.absolutePath}")
 
+    /**
+     * 整批共用一條連線與一個 transaction。逐筆各開一條連線時,每筆都要付「開檔 + prepare +
+     * commit 的 fsync」;dirty positions 一輪 flush 常常上百個 chunk,那是這個插件在伺服器
+     * 執行緒上最貴的一段(2026-08-13 spark:`DirtyPositionStore.persist` 約佔主執行緒 1%)。
+     * 失敗一律 rollback 後往外丟,由呼叫端決定重試策略。
+     */
+    fun <T> inTransaction(block: (Connection) -> T): T =
+        connect().use { conn ->
+            conn.autoCommit = false
+            try {
+                val result = block(conn)
+                conn.commit()
+                result
+            } catch (error: Exception) {
+                runCatching { conn.rollback() }
+                throw error
+            }
+        }
+
     fun init() {
         connect().use { conn ->
             conn.createStatement().use { st ->

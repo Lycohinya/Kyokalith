@@ -5,6 +5,7 @@ import org.bukkit.Location
 import org.bukkit.World
 import org.bukkit.entity.Entity
 import org.bukkit.plugin.Plugin
+import java.util.concurrent.TimeUnit
 
 object FoliaSchedulers {
 
@@ -33,4 +34,18 @@ object FoliaSchedulers {
         val handle = Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin, { task.run() }, delay, period)
         return { handle.cancel() }
     }
+
+    /** delay/period 進來是 tick(與 Schedulers 的其餘 API 一致),AsyncScheduler 只吃時間單位,這裡換算。 */
+    fun asyncTimer(plugin: Plugin, delay: Long, period: Long, task: Runnable): () -> Unit {
+        val handle = Bukkit.getAsyncScheduler().runAtFixedRate(
+            plugin,
+            { task.run() },
+            delay * MILLIS_PER_TICK,
+            period * MILLIS_PER_TICK,
+            TimeUnit.MILLISECONDS,
+        )
+        return { handle.cancel() }
+    }
+
+    private const val MILLIS_PER_TICK = 50L
 }

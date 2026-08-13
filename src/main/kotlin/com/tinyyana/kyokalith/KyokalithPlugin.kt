@@ -100,7 +100,11 @@ class KyokalithPlugin : JavaPlugin() {
         oreEligibilityService = OreEligibilityService(this)
 
         val flushIntervalTicks = config.getLong("database.dirty_flush_interval_ticks", 40L)
-        cancelDirtyFlush = Schedulers.globalTimer(this, flushIntervalTicks, flushIntervalTicks) {
+        // 非同步:這輪工作只有 SQLite 寫入,完全不碰 Bukkit API,沒有理由佔用伺服器/region 執行緒。
+        // 2026-08-13 spark 實測這段約佔主執行緒 1%(每輪逐 chunk 各開一條連線 + 各 commit 一次)。
+        // DirtyPositionStore 的共享狀態都是 concurrent 容器,寫入路徑另有自己的鎖,
+        // onDisable 的最後一次 flushAll 會等進行中的那輪跑完再寫。
+        cancelDirtyFlush = Schedulers.asyncTimer(this, flushIntervalTicks, flushIntervalTicks) {
             dirtyPositionStore.flushAll()
         }
 
