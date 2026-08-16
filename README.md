@@ -73,6 +73,7 @@ Version 1.3.4 keeps algorithm version `3` and does not clear any table; it only 
 | `resume` | `<cx> <cz>` | Lift a suspension | Player-only |
 | `markeligible` | `[x y z]` | QA tool: mark a block dirty and write an eligible token for it | Player-only |
 | `giveeligible` | `<player> <oreType> <1-64>` | QA tool: give a stack of ore blocks carrying PDC tokens | Console OK |
+| `notify` | `<on\|off>` | Toggle broadcasting to every online `kyokalith.admin` holder when a player mines a real ore; writes back to `config.yml` and takes effect immediately | Console OK |
 
 The `preview` / `sample` radius is clamped to `1..24` — these two are **deliberate brute-force exceptions**, admin-only and never on a hot path.
 
@@ -91,7 +92,7 @@ Non-survival modes (creative/spectator/adventure) never consume tokens either.
 
 The knobs you'll touch most are each ore's `cell_chance` / `density` / `preferred_y` — **these three are literally your server economy's faucet**. Full field reference, the hit-probability formula, and the red lines live in **[docs/CONFIG.md](docs/CONFIG.md)**.
 
-There is no `/kyo reload`; config is read once in `onEnable`.
+There is no `/kyo reload`; config is read once in `onEnable` — **the only exception is `notify_admins_on_ore_find`**, which is read live on every mining event, so `/kyo notify` takes effect without a restart or reload.
 
 ### Messages / languages
 
