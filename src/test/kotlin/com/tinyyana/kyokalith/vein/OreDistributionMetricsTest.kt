@@ -135,13 +135,18 @@ class OreDistributionMetricsTest {
                 "$oreType 隧道平均空窗 ${metric.meanSpacing.format()}m 超過門檻 ${spacingLimits.getValue(oreType)}m",
             )
         }
-        listOf(9, 60).forEach { y ->
+        // ancient_debris 的曲線 2026-08-29 起對齊原版,主帶與背景帶的空窗必須分開設門檻。
+        // 原版的獄髓就是「Y8~24 找得到,再往上基本上不存在」,拿主帶的 1800m 去要求 Y60
+        // 等於強迫這個礦種偏離原版——那正是舊曲線被壓平、主帶只剩原版 0.55x 的原因。
+        // Y9(三角帶下緣)仍守 1800m;Y60 只守「沒有整層歸零」,門檻依實測 ~6km 取 9000m。
+        val upperBandSpacingLimits = mapOf(9 to 1_800.0, 60 to 9_000.0)
+        upperBandSpacingLimits.forEach { (y, limit) ->
             val metric = tunnelMetric(resolvers, "ancient_debris", y, "NETHERRACK", "NETHER")
             println(
                 "TUNNEL|ancient_debris|y=$y|encounters1k=${metric.encountersPer1k.format()}|" +
                     "meanSpacing=${metric.meanSpacing.format()}",
             )
-            assertTrue(metric.meanSpacing <= 1_800.0, "ancient_debris y$y 平均空窗不可超過 1800m")
+            assertTrue(metric.meanSpacing <= limit, "ancient_debris y$y 平均空窗 ${metric.meanSpacing.format()}m 超過門檻 ${limit}m")
         }
     }
 
@@ -174,7 +179,10 @@ class OreDistributionMetricsTest {
             "emerald" to 1.0..8.0,
             "nether_quartz" to 45.0..75.0,
             "nether_gold" to 23.0..50.0,
-            "ancient_debris" to 2.0..10.0,
+            // 2026-08-29 曲線對齊原版後,Y15 的密度從原版的 0.55x 補回 ~1.0x,遭遇率自然跟著上升
+            // (實測 11.7/100 次爆炸)。這條帶是密度校準的衍生觀測值,不是獨立的設計目標——
+            // 密度已經被原版基準釘住了,這裡只擋「數量級跑掉」。
+            "ancient_debris" to 6.0..18.0,
         )
 
         layers.forEach { (oreType, layer) ->

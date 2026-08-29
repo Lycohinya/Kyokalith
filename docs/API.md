@@ -142,7 +142,7 @@ An already-visible natural ore has no synthetic `veinId`, but it must not be a o
 - target size is the ore's configured `vein_size`; hidden order is salt-ranked and does not follow the world-seed vanilla component;
 - growth is face-connected, limited to Chebyshev radius 4, loaded/owned blocks, and the same fixed `vein_size_max`;
 - the selected positions plus the directly adjacent original same-ore stop frontier are locked once; locked keep/stop members cannot seed another continuation;
-- at most `vein_size + 6 × vein_size` rows are written (224 at the global maximum), across loaded chunk boundaries in one SQLite transaction;
+- at most `vein_size + 6 × vein_size` rows are written (224 at the global maximum), across loaded chunk boundaries; since 1.5.0 they are buffered with every other lock produced by the same event and committed in one SQLite transaction at the end of it;
 - planning never calls `setType`; each selected or stop position changes only when it is itself first exposed;
 - if the transaction fails, every row rolls back, the exception is logged, and the triggering cancellable exposure event is cancelled before it can reveal an unlocked decoy.
 
@@ -150,7 +150,19 @@ An already-visible natural ore has no synthetic `veinId`, but it must not be a o
 
 ## Tables
 
-`plugins/Kyokalith/kyokalith.db`, SQLite, `journal_mode=WAL`. Every operation opens a fresh connection (no pool).
+`plugins/Kyokalith/kyokalith.db`, SQLite, `journal_mode=WAL`. There is no connection pool: an operation that reaches the database opens a fresh connection. Opening one costs about 0.4 ms, and a connection plus one query about 1.8–2.1 ms, so **no hot path may open a connection per coordinate** — an explosion resolves up to 512 blocks in a single event, and doing that once per block cost 919 ms on the region thread before 1.5.0. Two rules keep it off the hot path:
+
+- `eligible_placed_ores` is held entirely in memory (loaded once in `onEnable`, write-through afterwards). Lookups and removes for coordinates with no record never reach SQLite. This is what the explosion block list and every player ore break go through.
+- All materialization locks produced by one event are buffered and written in a single transaction (`MaterializationLockBuffer`), not one transaction per vein hit.
+
+Two further rules keep the *cost per commit* off the hot path — both were needed, and neither works alone:
+
+- **One connection stays open for the plugin's lifetime**, opened in `onEnable` and closed in `onDisable`. It never runs a query after the first one; it exists so that closing an operation's connection is never closing the *last* one, which would make SQLite checkpoint the entire WAL synchronously on that thread. Note that `DriverManager.getConnection` is lazy: a keep-alive connection that never executes a statement has not opened the database file and blocks nothing.
+- **`synchronous=NORMAL`** is set on every connection. In WAL mode this stops the per-commit fsync. Commits stay durable against a plugin or server crash (the case §9.4 cares about); only a power loss or OS crash can drop the last few seconds. That risk is bounded by what the table holds — a derived cache of a pure function, which re-resolves to the same answer at each coordinate's own first exposure. Worldgen-continuation shapes are the one part that could come out differently, and never in a way that reveals a buried block early.
+
+Measured on a copy of the live database, on the drive the server runs on, for a 10-row commit: 55–90 ms before, 23–25 ms with the keep-alive alone, 65 ms with `synchronous=NORMAL` alone, **6.5–11.6 ms** with both. The cost is nearly independent of row count — it is checkpoint and fsync, not the insert.
+
+`KyokalithDatabase.connectionsOpened` counts every connection opened and is shown in `/kyo stats`; a regression test asserts that a 512-block explosion-sized block list with nothing placed opens zero.
 
 ```sql
 meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)

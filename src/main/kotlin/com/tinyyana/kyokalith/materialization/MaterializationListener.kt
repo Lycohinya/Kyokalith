@@ -200,7 +200,25 @@ class MaterializationListener(
         if (removed.isEmpty()) return
         val snapshots = removed.map { RemovedBlockSnapshot(it, it.type.isOccluding) }
         runOwnedRegionNow(removed) {
-            if (!materialization.resolveExplosionSnapshots(snapshots)) onFailure()
+            // 爆炸是這個插件唯一一次在單一事件裡決算數百個座標的路徑,也是 2026-08-29 TPS 事故的
+            // 現場。決算全程同步佔住 region 執行緒,所以超過門檻就留下可查的證據——沒有這行,
+            // 「炸礦會卡」只能靠玩家體感回報,查起來要從頭重搭一次量測。
+            val startedNanos = System.nanoTime()
+            val ok = materialization.resolveExplosionSnapshots(snapshots)
+            val elapsedMs = (System.nanoTime() - startedNanos) / 1_000_000.0
+            if (elapsedMs > SLOW_EXPLOSION_WARN_MS) {
+                plugin.logger.warning(
+                    "Explosion resolution took %.1fms for %d blocks at %s %d %d %d".format(
+                        elapsedMs,
+                        snapshots.size,
+                        removed.first().world.name,
+                        removed.first().x,
+                        removed.first().y,
+                        removed.first().z,
+                    ),
+                )
+            }
+            if (!ok) onFailure()
         }
     }
 
@@ -243,6 +261,9 @@ class MaterializationListener(
 
     companion object {
         const val MAX_EXPLOSION_BLOCKS_PER_EVENT = 512
+
+        /** 一次爆炸決算超過這個時間就留 log:一個 tick 是 50ms,超過就是玩家看得到的卡頓。 */
+        const val SLOW_EXPLOSION_WARN_MS = 25.0
         private const val EXPOSURE_READ_RADIUS_CHUNKS = 1
 
         fun shouldCancelExplosion(size: Int): Boolean = size > MAX_EXPLOSION_BLOCKS_PER_EVENT

@@ -126,6 +126,10 @@ Nether (`dimension: NETHER`): `nether_quartz` `nether_gold` `ancient_debris`
 
 All `enabled: true`, `density: 1.0`.
 
+**The shape of `y_weight_points` matters more than the total.** `ancient_debris` shipped a nearly flat curve until 1.5.0 — peak `1.0` at Y15 against a `0.65` background, a peak-to-background ratio of 1.54 where vanilla's is roughly 21. Total yield was *above* vanilla (2.07x), but spread over 112 Y levels, so the band players actually mine held 0.55x vanilla and players correctly reported that netherite felt nothing like vanilla. If an ore feels wrong, check the ratio between its peak and its background before reaching for `density` or `cell_chance`: raising those on a flat curve just dumps more ore where nobody digs.
+
+**Per-ore rarity goes in `cell_chance`, not `density`.** They multiply, so they are mathematically interchangeable; the convention here keeps every bundled ore at `density: 1.0` so that `density` stays available as a clean global abundance knob for later.
+
 ## Adding a new ore
 
 ```yaml

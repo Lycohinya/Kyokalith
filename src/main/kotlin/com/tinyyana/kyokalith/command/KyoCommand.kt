@@ -68,6 +68,7 @@ class KyoCommand(private val plugin: KyokalithPlugin) : CommandExecutor, TabComp
                 m("stats-ores", "enabled" to oreCount, "total" to totalOreCount),
                 m("stats-placed-eligible", "count" to placedEligibleCount),
                 m("stats-suspended", "count" to suspendedCount),
+                m("stats-db-connections", "count" to plugin.database.connectionsOpened),
                 m("stats-vein-tools"),
                 m("stats-exposure"),
                 m("stats-token-drops"),

@@ -142,7 +142,7 @@ f(salt, world, epoch, oreType, cellX, cellY, cellZ) -> 命中/不命中
 - 目標大小使用該礦設定的 `vein_size`;隱藏順序由 salt 排名,不沿用可由 world seed 預測的原版 component;
 - 六面連通 growth 同時受 Chebyshev 半徑4、已載入/目前 region 擁有的方塊、以及 `vein_size_max` 限制;
 - 入選格與直接相鄰的原生同礦 stop frontier 一次鎖定;任何 keep/stop 鎖定成員都不能再開下一脈;
-- 最多寫入 `vein_size + 6 × vein_size` 筆(全域最大224),跨已載入 chunk 仍用單一 SQLite transaction;
+- 最多寫入 `vein_size + 6 × vein_size` 筆(全域最大224),可跨已載入 chunk;1.5.0 起與同一事件產生的其他鎖定一起緩衝,在事件結尾用單一 SQLite transaction 一次寫入;
 - 規劃階段絕不 `setType`;每格只在自己真正首次曝露時才套用 keep 或 stop 結果;
 - transaction 失敗時全批 rollback、記錄例外，並在未上鎖誘餌曝露前取消本次可取消的破壞／爆炸／燃燒／實體改方塊／活塞事件。
 
@@ -150,7 +150,19 @@ f(salt, world, epoch, oreType, cellX, cellY, cellZ) -> 命中/不命中
 
 ## 資料表
 
-`plugins/Kyokalith/kyokalith.db`,SQLite,`journal_mode=WAL`。每次操作開一條新連線(沒有連線池)。
+`plugins/Kyokalith/kyokalith.db`,SQLite,`journal_mode=WAL`。沒有連線池:真的走到資料庫的操作會開一條新連線。開一條約 0.4ms,連線加一次查詢約 1.8–2.1ms,所以**熱路徑一律不得逐座標開連線**——一次爆炸在單一事件內最多決算 512 個方塊,1.5.0 之前逐方塊開連線的代價是 919ms 卡在該 region 的執行緒上。兩條規則把它擋在熱路徑外:
+
+- `eligible_placed_ores` 整張表常駐記憶體(`onEnable` 載入一次,之後 write-through)。查詢與「沒有紀錄的座標」的移除完全不碰 SQLite。爆炸的 blockList 與每次玩家挖礦走的就是這條路徑。
+- 同一事件產生的所有實體化鎖定會緩衝起來一次寫入(`MaterializationLockBuffer`),不是每命中一次礦脈就開一次交易。
+
+另外兩條規則負責把**每次 commit 的成本**擋在熱路徑外,而且缺一不可:
+
+- **全程保留一條連線**,`onEnable` 開、`onDisable` 關。它開完跑一句之後就不再下任何指令,存在的唯一目的是讓每個操作的 close 不會是「最後一條連線關閉」——那會讓 SQLite 同步把整個 WAL checkpoint 回主檔,就在那條執行緒上。注意 `DriverManager.getConnection` 是延遲的:一條從沒跑過語句的 keep-alive 連線根本還沒開檔,什麼都擋不住。
+- **每條連線都設 `synchronous=NORMAL`**。WAL 模式下這會取消每次 commit 的 fsync。對「插件或伺服器崩潰」仍然是持久的(§9.4 在意的就是這件事),只有斷電或 OS 崩潰會丟掉最後幾秒。風險上限由這張表的性質決定——它是純函數的衍生決算快取,掉了也只是那些座標在自己下次首次曝露時重算出同樣的答案。唯一可能算出不同結果的是原生礦延續的形狀,而且不論如何都不會提前揭露任何埋藏方塊。
+
+在 s01 實際資料庫的複本、實際磁碟上量 10 個 row 的 commit:原本 55–90ms、只有 keep-alive 23–25ms、只有 `synchronous=NORMAL` 65ms、兩者都有 **6.5–11.6ms**。成本跟 row 數幾乎無關——貴的是 checkpoint 與 fsync,不是 insert。
+
+`KyokalithDatabase.connectionsOpened` 會計數所有開過的連線,並顯示在 `/kyo stats`;回歸測試釘住「512 顆方塊的爆炸清單、什麼都沒放置時,開啟連線數必須是 0」。
 
 ```sql
 meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)

@@ -1,10 +1,18 @@
 package com.tinyyana.kyokalith.materialization
 
+import com.tinyyana.kyokalith.chunk.EpochedChunk
+import com.tinyyana.kyokalith.chunk.LocalPos
+import com.tinyyana.kyokalith.db.KyokalithDatabase
 import com.tinyyana.kyokalith.ore.OreRegistry
+import com.tinyyana.kyokalith.vein.MaterializedPosition
+import com.tinyyana.kyokalith.vein.MaterializedVein
+import com.tinyyana.kyokalith.vein.MaterializedVeinStore
 import com.tinyyana.kyokalith.vein.OreVeinResolver
 import com.tinyyana.kyokalith.vein.VeinPosition
 import org.bukkit.Material
 import org.bukkit.configuration.file.YamlConfiguration
+import kotlin.io.path.createTempFile
+import kotlin.io.path.deleteIfExists
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -212,14 +220,70 @@ class MaterializationServiceTest {
         assertEquals(256, blocks.size)
     }
 
-    @Test
-    fun `one event cannot reserve more than the fixed materialization row budget`() {
-        val budget = MaterializationWriteBudget(MaterializationService.MAX_MATERIALIZED_ROWS_PER_EVENT)
+    private fun lockRows(from: Int, count: Int): Map<MaterializedPosition, MaterializedVein> =
+        (from until from + count).associate { i ->
+            MaterializedPosition(EpochedChunk("world", 0, 0, 0), LocalPos(i % 16, i, (i / 16) % 16)) to
+                MaterializedVein("iron", "v", "IRON_ORE")
+        }
 
-        assertTrue(budget.reserve(4_000))
-        assertFalse(budget.reserve(97))
-        assertTrue(budget.reserve(96))
-        assertFalse(budget.reserve(1))
+    @Test
+    fun `one event cannot buffer more than the fixed materialization row budget`() {
+        val file = createTempFile(suffix = ".db")
+        try {
+            val db = KyokalithDatabase(file.toFile())
+            db.init()
+            val locks = MaterializationLockBuffer(
+                MaterializationService.MAX_MATERIALIZED_ROWS_PER_EVENT,
+                MaterializedVeinStore(db),
+            )
+
+            assertTrue(locks.add(lockRows(0, 4_000)))
+            assertFalse(locks.add(lockRows(4_000, 97)))
+            assertTrue(locks.add(lockRows(4_000, 96)))
+            assertFalse(locks.add(lockRows(5_000, 1)))
+        } finally {
+            file.deleteIfExists()
+        }
+    }
+
+    @Test
+    fun `re-adding an already buffered position does not consume more budget`() {
+        val file = createTempFile(suffix = ".db")
+        try {
+            val db = KyokalithDatabase(file.toFile())
+            db.init()
+            val locks = MaterializationLockBuffer(10, MaterializedVeinStore(db))
+
+            assertTrue(locks.add(lockRows(0, 10)))
+            assertTrue(locks.add(lockRows(0, 10)), "同一批座標重複鎖定不該再吃額度")
+            assertFalse(locks.add(lockRows(10, 1)))
+        } finally {
+            file.deleteIfExists()
+        }
+    }
+
+    @Test
+    fun `buffered locks are visible to later lookups in the same event before they are flushed`() {
+        val file = createTempFile(suffix = ".db")
+        try {
+            val db = KyokalithDatabase(file.toFile())
+            db.init()
+            val store = MaterializedVeinStore(db)
+            val locks = MaterializationLockBuffer(64, store)
+            val chunk = EpochedChunk("world", 0, 0, 0)
+            val pos = LocalPos(1, 2, 3)
+
+            assertNull(locks.find(chunk, pos))
+            assertTrue(locks.add(mapOf(MaterializedPosition(chunk, pos) to MaterializedVein("iron", "v", "IRON_ORE"))))
+
+            assertEquals("IRON_ORE", locks.find(chunk, pos)?.material, "同一事件內稍早鎖定的座標必須被後續查詢看到")
+            assertNull(store.find(chunk, pos), "flush 之前不該落地")
+
+            assertTrue(locks.flush())
+            assertEquals("IRON_ORE", store.find(chunk, pos)?.material)
+        } finally {
+            file.deleteIfExists()
+        }
     }
 
     @Test

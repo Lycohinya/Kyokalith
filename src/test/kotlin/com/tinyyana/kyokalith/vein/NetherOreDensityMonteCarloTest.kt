@@ -131,9 +131,19 @@ class NetherOreDensityMonteCarloTest {
 
         assertTrue(hitsPer10k(resolver, "nether_quartz", y = 9) == 0.0, "quartz 在 y_min=10 下方不可出現")
         assertTrue(hitsPer10k(resolver, "nether_gold", y = 9) == 0.0, "nether_gold 在 y_min=10 下方不可出現")
-        listOf(9, 15, 60).forEach { y ->
+        // 2026-08-29 起 ancient_debris 的曲線對齊原版(Y8~24 三角峰在 Y16 + Y8~119 極稀薄均勻背景),
+        // 所以「一個門檻套三個 Y」已經沒有意義:原版在這三層的密度本來就差一個數量級以上。
+        // 換算:hits/10k x 256/10000 = 每 chunk 每層方塊數。原版基準(minecraft.wiki/w/Ancient_Debris
+        // 的兩個 cluster 推算)Y16 峰值約 0.123/chunk/層 = 4.8/10k,Y25 以上背景約 0.0054 = 0.21/10k。
+        // 各帶都留約 ±50% 餘裕:守的是「數量級沒跑掉」,不是把當下實測值凍結成規格。
+        val debrisBands = mapOf(
+            9 to 0.2..2.5,   // 三角帶下緣,原版此處也已明顯稀薄
+            15 to 2.0..6.0,  // 緊鄰 Y16 峰值,玩家實際開礦道的高度
+            60 to 0.05..1.0, // 均勻背景帶;原版在這裡就是幾乎挖不到,不可拿主帶的門檻套它
+        )
+        debrisBands.forEach { (y, band) ->
             val debris = hitsPer10k(resolver, "ancient_debris", y)
-            assertTrue(debris in 0.1..3.0, "ancient_debris y=$y 應明顯稀有但不可趨近零:$debris/10k")
+            assertTrue(debris in band, "ancient_debris y=$y 密度 $debris/10k 超出對齊原版後的校準帶 $band")
         }
     }
 }

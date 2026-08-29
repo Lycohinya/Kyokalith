@@ -214,8 +214,25 @@ ores:
     vein_size_max: 7
     cell_chance: 0.25
     priority: 40
-  # Ancient debris remains much rarer than quartz/gold. Its curve combines the vanilla-like
-  # Y15 batch with a lower uniform Y8~119 background so the upper band never collapses to zero.
+  # Ancient debris reproduces the two vanilla batches: a triangle over Y8~24 peaking at Y16,
+  # plus a much thinner uniform Y8~119 background.
+  #
+  # 2026-08-29 recalibration. The previous curve (peak 1.0 / background 0.65) was almost flat —
+  # a peak-to-background ratio of 1.54, against roughly 21 in vanilla. Total yield came out at
+  # 2.07x vanilla, but it was smeared over 112 Y levels, so the band players actually mine
+  # (Y8~24) held only 0.55x vanilla and a single Y16 layer only 0.34x. That is the "netherite
+  # feels nothing like vanilla" report: the total was never the problem, the shape was.
+  #
+  # background weight 0.05 = vanilla background layer density / vanilla peak layer density
+  # (0.0054 / 0.1234); cell_chance 0.125 then solves total = 56 * cell_chance * mean(weight) *
+  # E[vein_size] for vanilla's ~1.65 blocks per chunk. density stays 1.0 because this repo keeps
+  # density as the global abundance knob and expresses per-ore rarity through cell_chance.
+  # Measured over 1024 chunks x 4 salts: 1.65 blocks/chunk total, 1.03 in Y8~24, 0.118 at Y16 —
+  # all within 5% of vanilla. Source: https://minecraft.wiki/w/Ancient_Debris
+  #
+  # Tradeoff, deliberate: matching vanilla makes Y25+ genuinely dry (mean tunnel spacing at Y60
+  # goes from ~1.5km to ~6km). That is what vanilla does — netherite is found at Y8~24 or not
+  # at all — and it is why the Y60 spacing threshold in OreDistributionMetricsTest was relaxed.
   ancient_debris:
     enabled: true
     dimension: NETHER
@@ -223,15 +240,14 @@ ores:
       stone: ANCIENT_DEBRIS
     y_min: 8
     y_max: 119
-    preferred_y: 15
-    # Two vanilla-like batches: a Y15 peak plus a rarer uniform Y8~119 background.
+    preferred_y: 16
     y_weight_points:
-      - { y: 8, weight: 0.65 }
-      - { y: 15, weight: 1.0 }
-      - { y: 22, weight: 0.65 }
-      - { y: 119, weight: 0.65 }
+      - { y: 8, weight: 0.05 }
+      - { y: 16, weight: 1.0 }
+      - { y: 24, weight: 0.05 }
+      - { y: 119, weight: 0.05 }
     density: 1.0
     vein_size_min: 1
     vein_size_max: 3
-    cell_chance: 0.045
+    cell_chance: 0.125
     priority: 90

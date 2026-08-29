@@ -89,10 +89,21 @@ class KyokalithPlugin : JavaPlugin() {
             return
         }
 
+        // 握住一條不下指令的連線,讓每次 connect().use{} 的 close 不再是「最後一條連線關閉」
+        // ——那會同步 checkpoint 整個 WAL,是爆炸卡頓最後一塊(見 KyokalithDatabase.keepAlive)。
+        database.openKeepAliveConnection()
+
         chunkEpochStore = ChunkEpochStore(database)
         dirtyPositionStore = DirtyPositionStore(database, logger)
         suspendedChunkStore = SuspendedChunkStore(database)
         eligiblePlacedOreStore = EligiblePlacedOreStore(database)
+        // 整張表常駐記憶體,讓爆炸 blockList 與每次挖礦的查詢都不必開 SQLite 連線(見該類別註解)。
+        // 載入失敗就停用:半載入的快取會把既有 token 判成不存在,直接吃掉玩家的 eligible 礦。
+        runCatching { eligiblePlacedOreStore.loadAll() }.onFailure { e ->
+            logger.severe("Failed to load eligible placed ores, disabling plugin: ${e.message}")
+            server.pluginManager.disablePlugin(this)
+            return
+        }
         eligibleOrePdc = EligibleOrePdc(this)
         oreVeinResolver = OreVeinResolver(database.getMeta("salt") ?: error("database salt missing"), oreRegistry)
         materializedVeinStore = MaterializedVeinStore(database)
@@ -126,6 +137,8 @@ class KyokalithPlugin : JavaPlugin() {
     override fun onDisable() {
         cancelDirtyFlush?.invoke()
         if (::dirtyPositionStore.isInitialized) dirtyPositionStore.flushAll()
+        // 順序不能反:先把待寫的 dirty positions 落地,再放掉擋 WAL checkpoint 的那條連線。
+        if (::database.isInitialized) database.close()
     }
 
     private fun mergeConfigDefaults() {

@@ -1,11 +1,14 @@
 package com.tinyyana.kyokalith.db
 
+import java.io.File
 import java.sql.DriverManager
 import kotlin.io.path.createTempFile
 import kotlin.io.path.deleteIfExists
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class KyokalithDatabaseMigrationTest {
     @Test
@@ -111,6 +114,49 @@ class KyokalithDatabaseMigrationTest {
         val file = createTempFile(suffix = ".db")
         try {
             block(KyokalithDatabase(file.toFile()), "jdbc:sqlite:${file.toFile().absolutePath}")
+        } finally {
+            file.deleteIfExists()
+        }
+    }
+
+    /**
+     * 回歸測試(2026-08-29):keep-alive 連線的第一版只呼叫 getConnection,沒有在上面跑任何
+     * 語句——而 sqlite-jdbc 是延遲開檔的,那條連線根本沒碰到資料庫檔案,擋不住
+     * 「最後一條連線關閉時 checkpoint 整個 WAL」,線上量到的 commit 時間完全沒變。
+     * 判準用 -wal 檔存不存在:它只在真的有連線開著時才在磁碟上。
+     */
+    @Test
+    fun `keep-alive connection actually holds the database open and close releases it`() {
+        val file = createTempFile(suffix = ".db")
+        val wal = File(file.toFile().path + "-wal")
+        try {
+            val db = KyokalithDatabase(file.toFile())
+            db.init()
+            assertFalse(wal.isFile, "還沒開 keep-alive 時不該有 WAL 檔")
+
+            db.openKeepAliveConnection()
+            assertTrue(wal.isFile, "keep-alive 必須真的開啟資料庫檔案,否則擋不住 WAL checkpoint")
+
+            db.close()
+            assertFalse(wal.isFile, "close 之後必須放掉檔案,不然 PlugMan 熱插拔會卡住 SQLite 檔")
+        } finally {
+            file.deleteIfExists()
+        }
+    }
+
+    @Test
+    fun `opening the keep-alive twice does not leak a second connection`() {
+        val file = createTempFile(suffix = ".db")
+        try {
+            val db = KyokalithDatabase(file.toFile())
+            db.init()
+            db.openKeepAliveConnection()
+            val after = db.connectionsOpened
+
+            db.openKeepAliveConnection()
+
+            assertEquals(after, db.connectionsOpened)
+            db.close()
         } finally {
             file.deleteIfExists()
         }

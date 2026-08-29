@@ -5,6 +5,7 @@ import com.tinyyana.kyokalith.chunk.ChunkCoord
 import com.tinyyana.kyokalith.chunk.EpochedChunk
 import com.tinyyana.kyokalith.chunk.LocalPos
 import com.tinyyana.kyokalith.vein.MaterializedVein
+import com.tinyyana.kyokalith.vein.MaterializedVeinStore
 import com.tinyyana.kyokalith.vein.MaterializedPosition
 import com.tinyyana.kyokalith.vein.ResolvedVein
 import com.tinyyana.kyokalith.vein.VeinPosition
@@ -34,17 +35,42 @@ data class WorldgenContinuationPlan(
     val boundary: Map<VeinPosition, WorldgenContinuationNode>,
 )
 
-internal class MaterializationWriteBudget(private var remaining: Int) {
+/**
+ * 單一事件內所有鎖定 row 的緩衝區 + 固定寫入上限。
+ *
+ * 舊版每命中一次礦脈就各開一條 SQLite 連線、各 commit 一次;2026-08-29 實測(本機 SSD)
+ * **每次命中約 15ms**,一次爆炸命中 30 次就是 458ms 卡在該 region 的執行緒上。同一批改成單
+ * 一 transaction 後同樣 30 次只要 54ms(8.5×)。爆炸會在一個事件裡連續決算數十到數百個座標,
+ * 是這條路徑唯一會大量觸發的來源,所以緩衝的粒度取「一個事件」。
+ *
+ * [find] 把尚未落地的本次鎖定當成已鎖定回報,讓同一事件內後續座標看到的狀態與舊版
+ * 「每次命中立刻寫入並更新快取」完全一致;差別只在整批是全有全無:任何一筆失敗就整批
+ * rollback、呼叫端一個方塊都不改(舊版會留下已 commit 的前半批)。
+ */
+internal class MaterializationLockBuffer(
+    private var remainingRows: Int,
+    private val store: MaterializedVeinStore,
+) {
     init {
-        require(remaining >= 0)
+        require(remainingRows >= 0)
     }
 
-    fun reserve(rows: Int): Boolean {
-        require(rows >= 0)
-        if (rows > remaining) return false
-        remaining -= rows
+    private val pending = LinkedHashMap<MaterializedPosition, MaterializedVein>()
+
+    fun find(chunk: EpochedChunk, pos: LocalPos): MaterializedVein? =
+        pending[MaterializedPosition(chunk, pos)] ?: store.find(chunk, pos)
+
+    /** false = 超過本次事件的固定 row 上限,呼叫端必須保守停手。 */
+    fun add(entries: Map<MaterializedPosition, MaterializedVein>): Boolean {
+        val newRows = entries.keys.count { it !in pending }
+        if (newRows > remainingRows) return false
+        remainingRows -= newRows
+        pending.putAll(entries)
         return true
     }
+
+    /** 整批一次落地;false 代表這次事件不得改動任何方塊。 */
+    fun flush(): Boolean = store.upsertAll(pending)
 }
 
 /**
@@ -104,13 +130,13 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
         val active = ordered.filterNot { isDirty(it.block) }
         val visited = HashSet<PosKey>()
         val pending = LinkedHashMap<PosKey, PendingTypeChange>()
-        val budget = MaterializationWriteBudget(MAX_MATERIALIZED_ROWS_PER_EVENT)
+        val locks = MaterializationLockBuffer(MAX_MATERIALIZED_ROWS_PER_EVENT, plugin.materializedVeinStore)
         val trustedAnchors = HashSet<PosKey>()
 
         if (allowWorldgenContinuation) {
             for (snapshot in active) {
                 val origin = snapshot.block
-                when (activateWorldgenContinuation(origin, budget)) {
+                when (activateWorldgenContinuation(origin, locks)) {
                     AnchorResult.FAILED -> return false
                     AnchorResult.LOCKED -> trustedAnchors += PosKey(origin.x, origin.y, origin.z)
                     AnchorResult.NOT_ANCHOR -> Unit
@@ -121,7 +147,7 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
             for (snapshot in active) {
                 val origin = snapshot.block
                 if (PosKey(origin.x, origin.y, origin.z) !in trustedAnchors &&
-                    !resolveRemovedOrigin(origin, pending, budget)
+                    !resolveRemovedOrigin(origin, pending, locks)
                 ) {
                     return false
                 }
@@ -136,9 +162,11 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
                 val neighbor = blockIfLoaded(origin.world, nx, ny, nz) ?: continue
                 val key = PosKey(nx, ny, nz)
                 if (key in removedKeys || !visited.add(key)) continue
-                if (!resolveIfNewlyExposed(neighbor, removedKeys, alreadyExposingKeys, pending, budget)) return false
+                if (!resolveIfNewlyExposed(neighbor, removedKeys, alreadyExposingKeys, pending, locks)) return false
             }
         }
+        // 決算結果必須先完整落地才可以改動方塊(§9.4);整批失敗就一個方塊都不動。
+        if (!locks.flush()) return false
         pending.values.forEach { change ->
             if (change.block.type != change.target) change.block.setType(change.target, false)
         }
@@ -153,14 +181,14 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
      */
     private fun activateWorldgenContinuation(
         origin: Block,
-        budget: MaterializationWriteBudget,
+        locks: MaterializationLockBuffer,
     ): AnchorResult {
         val rootMaterial = origin.type
         val oreType = plugin.oreRegistry.oreTypeForEnabledMaterial(rootMaterial.name) ?: return AnchorResult.NOT_ANCHOR
         if (!hasAnyExposedFace(origin)) return AnchorResult.NOT_ANCHOR
 
         val rootPosition = materializedPosition(origin) ?: return AnchorResult.NOT_ANCHOR
-        if (plugin.materializedVeinStore.find(rootPosition.chunk, rootPosition.pos) != null) {
+        if (locks.find(rootPosition.chunk, rootPosition.pos) != null) {
             return AnchorResult.NOT_ANCHOR
         }
         val originPos = VeinPosition(origin.x, origin.y, origin.z)
@@ -179,7 +207,7 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
             val positionKey = materializedPosition(block) ?: return@planWorldgenContinuation null
             if (plugin.suspendedChunkStore.isSuspended(positionKey.chunk.coord())) return@planWorldgenContinuation null
             if (plugin.dirtyPositionStore.isDirty(positionKey.chunk, positionKey.pos)) return@planWorldgenContinuation null
-            if (plugin.materializedVeinStore.find(positionKey.chunk, positionKey.pos) != null) {
+            if (locks.find(positionKey.chunk, positionKey.pos) != null) {
                 return@planWorldgenContinuation null
             }
             val material = block.type
@@ -219,8 +247,7 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
             entries[key] = MaterializedVein(null, null, if (node.exposed) node.material else node.baseMaterial)
         }
         check(entries.size <= targetBlocks * 7) { "worldgen continuation lock exceeded fixed boundary cap" }
-        if (!budget.reserve(entries.size)) return AnchorResult.FAILED
-        return if (plugin.materializedVeinStore.upsertAll(entries)) AnchorResult.LOCKED else AnchorResult.FAILED
+        return if (locks.add(entries)) AnchorResult.LOCKED else AnchorResult.FAILED
     }
 
     /** 玩家放置/機制生成的座標永不實體化,之後挖開它也不觸發鄰居決算(§10)。 */
@@ -245,7 +272,7 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
         removedKeys: Set<PosKey>,
         alreadyExposingKeys: Set<PosKey>,
         pending: MutableMap<PosKey, PendingTypeChange>,
-        budget: MaterializationWriteBudget,
+        locks: MaterializationLockBuffer,
     ): Boolean {
         val current = block.type
         val decoyBase = if (current in BASE_BLOCKS) null else {
@@ -263,12 +290,12 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
         val epoched = EpochedChunk(coord.world, coord.cx, coord.cz, epoch)
         val local = localPos(block)
 
-        val lockedMaterial = plugin.materializedVeinStore.find(epoched, local)?.material
+        val lockedMaterial = locks.find(epoched, local)?.material
         val target = (
             if (lockedMaterial != null) {
                 Material.matchMaterial(lockedMaterial)
             } else {
-                resolveAndLock(block, base, decoyBase, epoched, budget)
+                resolveAndLock(block, base, decoyBase, epoched, locks)
             }
             ) ?: return false
         if (target != current) pending[PosKey(block.x, block.y, block.z)] = PendingTypeChange(block, target)
@@ -283,7 +310,7 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
     private fun resolveRemovedOrigin(
         block: Block,
         pending: MutableMap<PosKey, PendingTypeChange>,
-        budget: MaterializationWriteBudget,
+        locks: MaterializationLockBuffer,
     ): Boolean {
         val current = block.type
         val decoyBase = if (current in BASE_BLOCKS) null else {
@@ -295,12 +322,12 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
         if (plugin.suspendedChunkStore.isSuspended(coord)) return true
 
         val epoched = EpochedChunk(coord.world, coord.cx, coord.cz, plugin.chunkEpochStore.get(coord))
-        val lockedMaterial = plugin.materializedVeinStore.find(epoched, localPos(block))?.material
+        val lockedMaterial = locks.find(epoched, localPos(block))?.material
         val target = (
             if (lockedMaterial != null) {
                 Material.matchMaterial(lockedMaterial)
             } else {
-                resolveAndLock(block, base, decoyBase, epoched, budget)
+                resolveAndLock(block, base, decoyBase, epoched, locks)
             }
             ) ?: return false
         if (target != current) pending[PosKey(block.x, block.y, block.z)] = PendingTypeChange(block, target)
@@ -330,7 +357,7 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
         base: Material,
         decoyBase: Material?,
         epoched: EpochedChunk,
-        budget: MaterializationWriteBudget,
+        locks: MaterializationLockBuffer,
     ): Material? {
         val world = block.world
         val detailed = plugin.oreVeinResolver.resolveDetailed(
@@ -341,10 +368,10 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
         val triggerLocal = localPos(block)
         val entries = LinkedHashMap<LocalPos, MaterializedVein>()
         entries[triggerLocal] = MaterializedVein(detailed.result.oreType, detailed.result.veinId, detailed.result.material)
-        entries.putAll(collectShape(block, detailed, epoched))
+        entries.putAll(collectShape(block, detailed, epoched, locks))
 
-        if (!budget.reserve(entries.size)) return null
-        return if (plugin.materializedVeinStore.upsertAll(epoched, entries)) triggerMaterial else null
+        val positioned = entries.mapKeys { (pos, _) -> MaterializedPosition(epoched, pos) }
+        return if (locks.add(positioned)) triggerMaterial else null
     }
 
     /**
@@ -366,6 +393,7 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
         origin: Block,
         detailed: ResolvedVein,
         epoched: EpochedChunk,
+        locks: MaterializationLockBuffer,
     ): Map<LocalPos, MaterializedVein> {
         val world = origin.world
         val originCoord = ChunkCoord(world.name, Math.floorDiv(origin.x, 16), Math.floorDiv(origin.z, 16))
@@ -380,7 +408,7 @@ class MaterializationService(private val plugin: KyokalithPlugin) {
             if (nCoord != originCoord) continue // 跨 chunk 留給該 chunk 未來自己的首次曝露事件
 
             val nLocal = LocalPos(Math.floorMod(nx, 16), ny, Math.floorMod(nz, 16))
-            if (plugin.materializedVeinStore.find(epoched, nLocal) != null) continue // 已鎖定過
+            if (locks.find(epoched, nLocal) != null) continue // 已鎖定過(含本次事件稍早鎖的)
             if (plugin.dirtyPositionStore.isDirty(epoched, nLocal)) continue
 
             val nBlock = world.getBlockAt(nx, ny, nz)

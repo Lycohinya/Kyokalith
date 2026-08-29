@@ -3,12 +3,44 @@ package com.tinyyana.kyokalith.eligibility
 import com.tinyyana.kyokalith.db.KyokalithDatabase
 import java.sql.ResultSet
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * eligible_placed_ores:玩家放置的 qualified 礦物座標(token 生命週期見 docs/API.md)。
  * 座標唯一(world, x, y, z)——同座標重複放置會覆蓋前一筆紀錄。
+ *
+ * 整張表在 [loadAll] 一次載進記憶體,之後讀取路徑([find]、[remove] 的存在性判定)完全不碰 DB,
+ * 寫入則 write-through。這張表只裝「玩家親手放回世界的 eligible 礦」,正式服實測是個位數筆,
+ * 全量常駐的記憶體成本可以忽略。
+ *
+ * 這樣做的理由是熱路徑成本,不是方便:舊版每次查詢都 `DriverManager.getConnection()` 開一條新
+ * SQLite 連線,而 [com.tinyyana.kyokalith.mining.OreLifecycleListener] 的爆炸處理會對 blockList
+ * **每一顆方塊**各叫一次 [remove]。2026-08-29 實測(本機 SSD、表內 4 筆):每顆方塊約 1.8–2.1ms,
+ * 一次床爆炸(約80顆)= 172ms、打到 512 顆上限 = 919ms,全部同步發生在該 region 的執行緒上——
+ * 這就是「用 TNT/床炸礦會讓該 region TPS 下滑」的主因。同一條路徑也在每次玩家挖礦時觸發
+ * ([com.tinyyana.kyokalith.mining.OreEligibilityService.find]),違反 KYOKALITH_SPEC §15.1
+ * 「熱路徑無 DB I/O」。
  */
 class EligiblePlacedOreStore(private val db: KyokalithDatabase) {
+
+    private data class PositionKey(val world: String, val x: Int, val y: Int, val z: Int)
+
+    private val cache = ConcurrentHashMap<PositionKey, EligiblePlacedOre>()
+
+    /** 啟動時呼叫一次;失敗必須讓插件停用,半載入的快取會讓 [find] 漏報既有 token。 */
+    fun loadAll() {
+        val rows = db.connect().use { conn ->
+            conn.createStatement().use { st ->
+                st.executeQuery("SELECT * FROM eligible_placed_ores").use { rs ->
+                    val list = ArrayList<EligiblePlacedOre>()
+                    while (rs.next()) list += rs.toEligiblePlacedOre()
+                    list
+                }
+            }
+        }
+        cache.clear()
+        rows.forEach { cache[it.key()] = it }
+    }
 
     fun insert(ore: EligiblePlacedOre) {
         db.connect().use { conn ->
@@ -32,23 +64,18 @@ class EligiblePlacedOreStore(private val db: KyokalithDatabase) {
                 stmt.executeUpdate()
             }
         }
+        cache[ore.key()] = ore
     }
 
-    fun find(world: String, x: Int, y: Int, z: Int): EligiblePlacedOre? =
-        db.connect().use { conn ->
-            conn.prepareStatement(
-                "SELECT * FROM eligible_placed_ores WHERE world = ? AND x = ? AND y = ? AND z = ?",
-            ).use { stmt ->
-                stmt.setString(1, world)
-                stmt.setInt(2, x)
-                stmt.setInt(3, y)
-                stmt.setInt(4, z)
-                stmt.executeQuery().use { rs -> if (rs.next()) rs.toEligiblePlacedOre() else null }
-            }
-        }
+    fun find(world: String, x: Int, y: Int, z: Int): EligiblePlacedOre? = cache[PositionKey(world, x, y, z)]
 
+    /**
+     * 沒有紀錄就完全不碰 DB——爆炸的 blockList 幾乎每一顆都是這條路徑,這是本方法存在
+     * 記憶體索引的主要理由。
+     */
     fun remove(world: String, x: Int, y: Int, z: Int): EligiblePlacedOre? {
-        val existing = find(world, x, y, z) ?: return null
+        val key = PositionKey(world, x, y, z)
+        val existing = cache[key] ?: return null
         db.connect().use { conn ->
             conn.prepareStatement(
                 "DELETE FROM eligible_placed_ores WHERE world = ? AND x = ? AND y = ? AND z = ?",
@@ -60,6 +87,7 @@ class EligiblePlacedOreStore(private val db: KyokalithDatabase) {
                 stmt.executeUpdate()
             }
         }
+        cache.remove(key)
         return existing
     }
 
@@ -75,16 +103,12 @@ class EligiblePlacedOreStore(private val db: KyokalithDatabase) {
                 stmt.executeUpdate()
             }
         }
+        cache.keys.removeIf { it.world == world && (it.x shr 4) == cx && (it.z shr 4) == cz }
     }
 
-    fun count(): Int =
-        db.connect().use { conn ->
-            conn.createStatement().use { st ->
-                st.executeQuery("SELECT COUNT(*) AS c FROM eligible_placed_ores").use { rs ->
-                    if (rs.next()) rs.getInt("c") else 0
-                }
-            }
-        }
+    fun count(): Int = cache.size
+
+    private fun EligiblePlacedOre.key() = PositionKey(world, x, y, z)
 
     private fun ResultSet.toEligiblePlacedOre() = EligiblePlacedOre(
         world = getString("world"),
