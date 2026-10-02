@@ -4,7 +4,7 @@
 # 啟用:config.yml 設 locale: zh_TW
 
 no-permission: "&c沒有權限"
-usage-root: "&e用法:/kyo stats | inspect <x> <y> <z> [world] | preview [radius] [x y z [world]] | sample volume [radius] | markeligible [x y z] | giveeligible <player> <oreType> <amount> | suspend <cx> <cz> <reason> | resume <cx> <cz> | resolve <x> <y> <z> [world] | notify <on|off>"
+usage-root: "&e用法:/kyo stats | inspect <x> <y> <z> [world] | chunk <cx> <cz> [world] | preview [radius] [x y z [world]] | sample volume [radius] | markeligible [x y z] | giveeligible <player> <oreType> <amount> | suspend <cx> <cz> <reason> | resume <cx> <cz> | resolve <x> <y> <z> [world] | notify <on|off>"
 player-only: "&c這個指令只能由玩家使用"
 coords-not-int: "&c座標必須是整數"
 chunk-coords-not-int: "&cchunk 座標必須是整數"
@@ -23,6 +23,7 @@ stats-exposure: "&7事件驅動曝露決算(誘餌模型,無 chunk 掃描):&a可
 stats-token-drops: "&7eligible token/OreCheckTriggerEvent:&a可用"
 stats-decoy-layer: "&7誘餌層:&f原版世界生成礦(世界資料未改動)"
 stats-nature-revive: "&7NatureRevive epoch 整合:&f{state}"
+stats-nohara: "&7Nohara 還原整合:&f{state}&7(收到事件 {events}、失敗 {failed})"
 state-active: "&aactive"
 state-inactive: "&cinactive"
 
@@ -35,6 +36,12 @@ inspect-suspended: "&7suspended:&f{suspended}"
 inspect-placed: "&7placed eligible:&f{ore}"
 inspect-vein: "&7vein result:&f{result}"
 inspect-locked: "&7已鎖定(materialized_positions):&f{state}"
+
+usage-chunk: "&e用法:/kyo chunk <cx> <cz> [world]"
+chunk-header: "&b[Kyokalith] chunk {world} {cx},{cz}"
+chunk-epoch: "&7epoch/suspended:&f{epoch}/{suspended}"
+chunk-counts: "&7dirty / locked / placed token(目前 epoch):&f{dirty} / {locked} / {placed}"
+chunk-nohara: "&7最近一次 Nohara 還原:&f{last}"
 
 preview-hits: "&b[Kyokalith] preview 半徑 {radius} 命中 {total} 格"
 preview-example: "&7- &f{x} {y} {z} &7{ore}->{material}"

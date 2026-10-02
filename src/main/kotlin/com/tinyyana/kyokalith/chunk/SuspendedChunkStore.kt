@@ -28,6 +28,14 @@ class SuspendedChunkStore(private val db: KyokalithDatabase) {
         cache[coord] = true
     }
 
+    /**
+     * 只改記憶體、不碰 SQLite:給「在 region 執行緒上發現出錯、需要立刻擋住該 chunk」的路徑用,
+     * 持久化由呼叫端稍後在非 tick 執行緒補 [suspend]。重開服後這個旗標不會保留。
+     */
+    fun suspendInMemory(coord: ChunkCoord) {
+        cache[coord] = true
+    }
+
     fun resume(coord: ChunkCoord) {
         db.connect().use { conn ->
             conn.prepareStatement(

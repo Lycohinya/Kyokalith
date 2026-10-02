@@ -41,6 +41,7 @@ class KyoCommand(private val plugin: KyokalithPlugin) : CommandExecutor, TabComp
         return when (args.firstOrNull()?.lowercase()) {
             "stats" -> stats(sender)
             "inspect" -> inspect(sender, args.drop(1))
+            "chunk" -> chunkStatus(sender, args.drop(1))
             "preview" -> preview(sender, args.drop(1))
             "sample" -> sample(sender, args.drop(1))
             "markeligible" -> markEligible(sender, args.drop(1))
@@ -74,6 +75,12 @@ class KyoCommand(private val plugin: KyokalithPlugin) : CommandExecutor, TabComp
                 m("stats-token-drops"),
                 m("stats-decoy-layer"),
                 m("stats-nature-revive", "state" to m(if (plugin.natureReviveBridgeActive) "state-active" else "state-inactive")),
+                m(
+                    "stats-nohara",
+                    "state" to m(if (plugin.noharaBridge.active) "state-active" else "state-inactive"),
+                    "events" to plugin.noharaBridge.eventsSeen(),
+                    "failed" to plugin.noharaBridge.failureCount(),
+                ),
             ).joinToString("\n"),
         )
         return true
@@ -258,6 +265,48 @@ class KyoCommand(private val plugin: KyokalithPlugin) : CommandExecutor, TabComp
         return true
     }
 
+    /**
+     * `/kyo chunk <cx> <cz> [world]`:該 chunk 的 Kyokalith 狀態,只讀 store、不碰世界方塊,所以在任何執行緒
+     * (含 Folia 主控台/RCON)都能當場回覆。同一行也寫進 log(`KYO_CHUNK ...`),給腳本從 latest.log 取證。
+     */
+    private fun chunkStatus(sender: CommandSender, args: List<String>): Boolean {
+        if (args.size !in 2..3) {
+            sender.sendMessage(m("usage-chunk"))
+            return true
+        }
+        val cx = args[0].toIntOrNull()
+        val cz = args[1].toIntOrNull()
+        if (cx == null || cz == null) {
+            sender.sendMessage(m("chunk-coords-not-int"))
+            return true
+        }
+        val world = resolveWorld(sender, args.getOrNull(2)) ?: return true
+        val coord = ChunkCoord(world.name, cx, cz)
+        val epoch = plugin.chunkEpochStore.get(coord)
+        val epoched = EpochedChunk(coord.world, cx, cz, epoch)
+        val suspended = plugin.suspendedChunkStore.isSuspended(coord)
+        val dirty = plugin.dirtyPositionStore.count(epoched)
+        val locked = plugin.materializedVeinStore.count(epoched)
+        val placed = plugin.eligiblePlacedOreStore.inChunk(coord.world, cx, cz).size
+        val last = plugin.noharaBridge.lastRestore(coord)
+        val lastText = last?.let {
+            "${it.status} ${it.kind} op=${it.opId} epoch ${it.oldEpoch}->${it.newEpoch} dirtyCarried=${it.dirtyCarried} staleTokens=${it.staleTokens}"
+        } ?: m("none")
+        sender.sendMessage(
+            listOf(
+                m("chunk-header", "world" to coord.world, "cx" to cx, "cz" to cz),
+                m("chunk-epoch", "epoch" to epoch, "suspended" to suspended),
+                m("chunk-counts", "dirty" to dirty, "locked" to locked, "placed" to placed),
+                m("chunk-nohara", "last" to lastText),
+            ).joinToString("\n"),
+        )
+        plugin.logger.info(
+            "KYO_CHUNK world=${coord.world} cx=$cx cz=$cz epoch=$epoch suspended=$suspended dirty=$dirty locked=$locked placed=$placed " +
+                "nohara=${last?.let { "${it.status}/${it.kind}/op${it.opId}/${it.oldEpoch}->${it.newEpoch}/carried${it.dirtyCarried}" } ?: "none"}",
+        )
+        return true
+    }
+
     private fun suspend(sender: CommandSender, args: List<String>): Boolean {
         val player = sender as? Player ?: return playerOnly(sender)
         if (args.size < 3) {
@@ -364,6 +413,7 @@ class KyoCommand(private val plugin: KyokalithPlugin) : CommandExecutor, TabComp
                 else -> emptyList()
             }
             "suspend", "resume" -> chunkCoordSuggestion(sender, i)
+            "chunk" -> if (i == 3) worldNames() else chunkCoordSuggestion(sender, i)
             "notify" -> if (i == 1) listOf("on", "off") else emptyList()
             else -> emptyList()
         }
@@ -459,7 +509,7 @@ class KyoCommand(private val plugin: KyokalithPlugin) : CommandExecutor, TabComp
     private data class HitSummary(val scanned: Int, val total: Int, val examples: List<HitExample>)
 
     private companion object {
-        val SUBCOMMANDS = listOf("stats", "inspect", "preview", "sample", "markeligible", "giveeligible", "suspend", "resume", "resolve", "notify")
+        val SUBCOMMANDS = listOf("stats", "inspect", "chunk", "preview", "sample", "markeligible", "giveeligible", "suspend", "resume", "resolve", "notify")
         val RADIUS_SUGGESTIONS = listOf("8", "16", "24")
         val AMOUNT_SUGGESTIONS = listOf("1", "16", "64")
     }

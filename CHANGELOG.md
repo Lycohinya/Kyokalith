@@ -2,6 +2,13 @@
 
 All notable changes to Kyokalith are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/). The release CI extracts the matching `## [x.y.z]` section as the GitHub Release notes — a tag without a section here fails the release on purpose.
 
+## [1.6.0] - 2026-10-02
+
+### Added
+
+- **Nohara restore bridge.** Nohara (wilderness restore / terrain update) refuses to write while Kyokalith is enabled but not listening to `NoharaChunkRestoredEvent`; Kyokalith now listens (reflection; registers when Nohara enables, since Nohara always loads after Kyokalith, and re-registers when Nohara is reloaded). On `RESTORED` / `ROLLED_BACK` the chunk's epoch is bumped and its materialized locks dropped, so a vein revealed before the restore is not reproduced in the same place. Dirty positions are **carried to the new epoch rather than dropped** (Nohara only rewrites cells that differ from the donor, so a player-refilled hole it left alone must stay dirty), and placed tokens are kept unless their block is gone. The event handler only touches memory; all SQLite work runs on one dedicated worker thread, ordered so a crash leaves only unreferenced rows. A failed invalidation leaves the chunk suspended and logs `KYOKALITH_NOHARA_INVALIDATE_FAILED`. No chunk is scanned.
+- `/kyo chunk <cx> <cz> [world]`: per-chunk epoch / suspended / dirty / locked / placed-token counts and the last Nohara restore, readable from the console and RCON (also logged as `KYO_CHUNK`). `/kyo stats` shows the Nohara bridge state; the enable log line now says `Nohara bridge: active|inactive`.
+
 ## [1.5.0] - 2026-08-29
 
 ### Fixed

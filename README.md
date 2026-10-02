@@ -38,7 +38,7 @@ Rationale: if something is hiding under a player-placed block, it must have been
 | Server | **Spigot or Paper 26.2, or Folia 26.1.2** (newest Folia — no 26.2 Folia exists, hence `api-version: 26.1`; compiled against the Spigot API; runs in production on Paper) |
 | Java | **25** |
 | Hard dependencies | None |
-| Soft dependencies | NatureRevive (chunk-regeneration bridge, loaded via reflection only if present) |
+| Soft dependencies | NatureRevive (chunk-regeneration bridge) and Nohara (wilderness-restore bridge), both loaded via reflection only if present |
 
 The Kotlin stdlib and SQLite driver are downloaded at startup by the Bukkit library loader — **not shaded into the jar**.
 
@@ -64,8 +64,9 @@ Version 1.3.4 keeps algorithm version `3` and does not clear any table; it only 
 
 | Subcommand | Args | What it does | Who |
 |---|---|---|---|
-| `stats` | – | Ore type count, eligible block count, suspended chunks, NatureRevive bridge state | Console OK |
+| `stats` | – | Ore type count, eligible block count, suspended chunks, NatureRevive and Nohara bridge state | Console OK |
 | `inspect` | `<x> <y> <z> [world]` | Dump epoch, block, dirty/suspended flags, and vein-function result for a coordinate | Console OK |
+| `chunk` | `<cx> <cz> [world]` | Per-chunk state: epoch, suspended flag, dirty / locked / placed-token counts, last Nohara restore (also logged as `KYO_CHUNK ...`). Reads stores only | Console OK |
 | `preview` | `[radius]` or `<radius> <x> <y> <z> [world]` | Brute-force scan a cube, report hits and up to 12 example coordinates | Short form player-only |
 | `sample` | `volume [radius]` | Same scan, reports `hits / scanned` only | Player-only |
 | `resolve` | `<x> <y> <z> [world]` | Re-run first-exposure resolution for a coordinate (`f` is deterministic, safe to re-run) | Console OK |

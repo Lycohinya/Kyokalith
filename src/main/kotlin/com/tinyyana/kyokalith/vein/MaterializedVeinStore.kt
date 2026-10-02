@@ -121,6 +121,9 @@ class MaterializedVeinStore(private val db: KyokalithDatabase) {
             }
         }
 
+    /** 診斷用:該(區塊, epoch)目前已鎖定的座標數。 */
+    fun count(chunk: EpochedChunk): Int = loadIfAbsent(chunk).size
+
     fun count(): Int =
         db.connect().use { conn ->
             conn.createStatement().use { st ->

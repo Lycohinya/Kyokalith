@@ -6,6 +6,8 @@ version: '${version}'
 main: com.tinyyana.kyokalith.KyokalithPlugin
 api-version: '26.1'
 load: POSTWORLD
+# 刻意不列 Nohara:LycohinyaCore 已 softdepend Kyokalith、Nohara 又 softdepend LycohinyaCore,再加 Kyokalith→Nohara 會成環。
+# Nohara 一律晚於 Kyokalith 載入,NoharaBridge 改在 PluginEnableEvent(Nohara) 時才註冊(整合閘門只在寫入時檢查,不看載入順序)。
 softdepend: [ NatureRevive ]
 
 folia-supported: true

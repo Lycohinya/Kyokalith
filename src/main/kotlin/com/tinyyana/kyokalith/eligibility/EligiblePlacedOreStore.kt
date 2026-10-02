@@ -106,6 +106,33 @@ class EligiblePlacedOreStore(private val db: KyokalithDatabase) {
         cache.keys.removeIf { it.world == world && (it.x shr 4) == cx && (it.z shr 4) == cz }
     }
 
+    /** 記憶體快照:該 chunk 內所有 placed token(不碰 DB)。 */
+    fun inChunk(world: String, cx: Int, cz: Int): List<EligiblePlacedOre> =
+        cache.values.filter { it.world == world && (it.x shr 4) == cx && (it.z shr 4) == cz }
+
+    /** 只從記憶體移除這一筆(同一個 token 才移);DB 刪除由 [deletePersisted] 在非 tick 執行緒補。 */
+    fun forgetInMemory(ore: EligiblePlacedOre): Boolean = cache.remove(ore.key(), ore)
+
+    /** 一個 transaction 刪掉這批 token 的 DB 列;只能在非 tick 執行緒呼叫。 */
+    fun deletePersisted(ores: List<EligiblePlacedOre>) {
+        if (ores.isEmpty()) return
+        db.inTransaction { conn ->
+            conn.prepareStatement(
+                "DELETE FROM eligible_placed_ores WHERE world = ? AND x = ? AND y = ? AND z = ? AND token_id IS ?",
+            ).use { stmt ->
+                ores.forEach { ore ->
+                    stmt.setString(1, ore.world)
+                    stmt.setInt(2, ore.x)
+                    stmt.setInt(3, ore.y)
+                    stmt.setInt(4, ore.z)
+                    stmt.setString(5, ore.tokenId)
+                    stmt.addBatch()
+                }
+                stmt.executeBatch()
+            }
+        }
+    }
+
     fun count(): Int = cache.size
 
     private fun EligiblePlacedOre.key() = PositionKey(world, x, y, z)

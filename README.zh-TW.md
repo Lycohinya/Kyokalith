@@ -38,7 +38,7 @@ TNT 會在掉落物產生前同時決算「被炸掉的體積」與「新形成�
 | 伺服器 | **Spigot 或 Paper 26.2,或 Folia 26.1.2**(Folia 最新就是 26.1.2、沒有 26.2,因此 `api-version` 降為 26.1;以 Spigot API 編譯;正式環境跑 Paper) |
 | Java | **25** |
 | 硬相依 | 無 |
-| 軟相依 | NatureRevive(有裝才會接區塊重生事件,反射載入) |
+| 軟相依 | NatureRevive(有裝才會接區塊重生事件)、Nohara(有裝才會接野外還原事件),皆反射載入 |
 
 Kotlin stdlib 與 SQLite 驅動由 Bukkit library loader 在啟動時下載,**不 shade 進 jar**。
 
@@ -64,8 +64,9 @@ Kotlin stdlib 與 SQLite 驅動由 Bukkit library loader 在啟動時下載,**�
 
 | 子指令 | 參數 | 做什麼 | 誰能用 |
 |---|---|---|---|
-| `stats` | – | 礦種數、eligible 方塊數、暫停區塊數、NatureRevive 橋接狀態 | 主控台可 |
+| `stats` | – | 礦種數、eligible 方塊數、暫停區塊數、NatureRevive 與 Nohara 橋接狀態 | 主控台可 |
 | `inspect` | `<x> <y> <z> [world]` | 傾印該座標的 epoch、方塊、dirty/暫停旗標、礦脈函數結果 | 主控台可 |
+| `chunk` | `<cx> <cz> [world]` | 該區塊的狀態:epoch、暫停旗標、dirty / 鎖定 / placed token 數、最近一次 Nohara 還原(同時寫 log `KYO_CHUNK ...`);只讀 store | 主控台可 |
 | `preview` | `[半徑]` 或 `<半徑> <x> <y> <z> [world]` | 暴力掃一個立方體,回報命中數與最多 12 個範例座標 | 短式限玩家 |
 | `sample` | `volume [半徑]` | 同上,只回報 `命中 / 掃描` | 限玩家 |
 | `resolve` | `<x> <y> <z> [world]` | 對該座標重跑一次首次曝光解析(`f` 是確定性的,重跑安全) | 主控台可 |

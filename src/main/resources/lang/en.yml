@@ -5,7 +5,7 @@
 # then set `locale: <locale>` in config.yml.
 
 no-permission: "&cYou don't have permission"
-usage-root: "&eUsage: /kyo stats | inspect <x> <y> <z> [world] | preview [radius] [x y z [world]] | sample volume [radius] | markeligible [x y z] | giveeligible <player> <oreType> <amount> | suspend <cx> <cz> <reason> | resume <cx> <cz> | resolve <x> <y> <z> [world] | notify <on|off>"
+usage-root: "&eUsage: /kyo stats | inspect <x> <y> <z> [world] | chunk <cx> <cz> [world] | preview [radius] [x y z [world]] | sample volume [radius] | markeligible [x y z] | giveeligible <player> <oreType> <amount> | suspend <cx> <cz> <reason> | resume <cx> <cz> | resolve <x> <y> <z> [world] | notify <on|off>"
 player-only: "&cThis command can only be used by a player"
 coords-not-int: "&cCoordinates must be integers"
 chunk-coords-not-int: "&cChunk coordinates must be integers"
@@ -24,6 +24,7 @@ stats-exposure: "&7Event-driven exposure resolution (decoy model, no chunk scann
 stats-token-drops: "&7Eligible ore tokens / OreCheckTriggerEvent: &aavailable"
 stats-decoy-layer: "&7Decoy layer: &fvanilla world-gen ores (world data untouched)"
 stats-nature-revive: "&7NatureRevive epoch bridge: &f{state}"
+stats-nohara: "&7Nohara restore bridge: &f{state}&7 (events {events}, failed {failed})"
 state-active: "&aactive"
 state-inactive: "&cinactive"
 
@@ -36,6 +37,12 @@ inspect-suspended: "&7suspended: &f{suspended}"
 inspect-placed: "&7placed eligible: &f{ore}"
 inspect-vein: "&7vein result: &f{result}"
 inspect-locked: "&7locked (materialized_positions): &f{state}"
+
+usage-chunk: "&eUsage: /kyo chunk <cx> <cz> [world]"
+chunk-header: "&b[Kyokalith] chunk {world} {cx},{cz}"
+chunk-epoch: "&7epoch/suspended: &f{epoch}/{suspended}"
+chunk-counts: "&7dirty / locked / placed tokens (current epoch): &f{dirty} / {locked} / {placed}"
+chunk-nohara: "&7last Nohara restore: &f{last}"
 
 preview-hits: "&b[Kyokalith] preview radius {radius}: {total} block(s) matched"
 preview-example: "&7- &f{x} {y} {z} &7{ore}->{material}"

@@ -8,6 +8,7 @@ import com.tinyyana.kyokalith.db.KyokalithDatabase
 import com.tinyyana.kyokalith.eligibility.EligiblePlacedOreStore
 import com.tinyyana.kyokalith.i18n.Messages
 import com.tinyyana.kyokalith.integration.NatureReviveBridge
+import com.tinyyana.kyokalith.integration.NoharaBridge
 import com.tinyyana.kyokalith.materialization.MaterializationListener
 import com.tinyyana.kyokalith.materialization.MaterializationService
 import com.tinyyana.kyokalith.mining.OreEligibilityService
@@ -48,6 +49,8 @@ class KyokalithPlugin : JavaPlugin() {
     lateinit var messages: Messages
         private set
     var natureReviveBridgeActive: Boolean = false
+        private set
+    lateinit var noharaBridge: NoharaBridge
         private set
 
     // 挖礦事件在觸發玩家所在 region 的執行緒上處理，/kyo notify 則可能來自主控台或另一名玩家的
@@ -129,12 +132,19 @@ class KyokalithPlugin : JavaPlugin() {
         server.pluginManager.registerEvents(OreLifecycleListener(this, oreEligibilityService), this)
         server.pluginManager.registerEvents(OreFindNotifyListener(this), this)
         natureReviveBridgeActive = NatureReviveBridge(this).register()
+        // Nohara 的整合閘門只認「有 listener 掛在 NoharaChunkRestoredEvent 上」;Nohara 不在時 register() 回 false,Kyokalith 照常運作。
+        // bridge 本身也是 Listener:Nohara 之後才載入/熱重載時,依 PluginEnableEvent 重新註冊。
+        noharaBridge = NoharaBridge(this)
+        server.pluginManager.registerEvents(noharaBridge, this)
+        noharaBridge.register()
         logger.info(
-            "Kyokalith ${description.version} enabled (decoy model: event-driven exposure resolution, silk/placed token lifecycle, OreCheckTriggerEvent available, no chunk scanning, NatureRevive bridge: ${if (natureReviveBridgeActive) "active" else "inactive"}, scheduler: ${if (Schedulers.isFolia) "Folia regionized" else "Bukkit main thread"})",
+            "Kyokalith ${description.version} enabled (decoy model: event-driven exposure resolution, silk/placed token lifecycle, OreCheckTriggerEvent available, no chunk scanning, NatureRevive bridge: ${if (natureReviveBridgeActive) "active" else "inactive"}, Nohara bridge: ${if (noharaBridge.active) "active" else "waits for Nohara to enable"}, scheduler: ${if (Schedulers.isFolia) "Folia regionized" else "Bukkit main thread"})",
         )
     }
 
     override fun onDisable() {
+        // 先讓已排入的 Nohara 還原失效工作做完,它們還要用 dirty store 與資料庫
+        if (::noharaBridge.isInitialized) noharaBridge.shutdown()
         cancelDirtyFlush?.invoke()
         if (::dirtyPositionStore.isInitialized) dirtyPositionStore.flushAll()
         // 順序不能反:先把待寫的 dirty positions 落地,再放掉擋 WAL checkpoint 的那條連線。

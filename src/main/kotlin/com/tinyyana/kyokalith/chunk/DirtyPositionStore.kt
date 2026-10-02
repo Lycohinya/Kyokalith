@@ -97,6 +97,38 @@ class DirtyPositionStore(
         }
     }
 
+    /**
+     * 區塊地形被 Nohara 部分改寫(只寫跟 donor 不同、且沒被玩家再改過的格子)之後,舊 epoch 的 dirty 旗標
+     * 搬到新 epoch。這裡刻意跟 NatureRevive 的整塊再生不同:Nohara 沒寫的格子還是玩家填回去的方塊
+     * (例如把洞用石頭補上、而 donor 同位置也是石頭,根本不會被判成差異),它們仍然是「玩家放置」,
+     * 丟掉旗標就等於重開「蓋住誘餌再挖出來跳過決算」的漏洞。只會讓旗標偏多(少換礦),不會偏少。
+     *
+     * 順序:先把新 epoch 的集合落地,呼叫端才可以讓 epoch 前進;之後再叫一次補上 epoch 切換瞬間才標進舊集合的座標。
+     * 跟 [flush]/[clearEpoch] 同一把鎖;會同步讀寫 SQLite,只能在非 tick 執行緒呼叫。
+     * 回傳這次新增到新 epoch 的座標數。
+     */
+    fun carryOver(from: EpochedChunk, to: EpochedChunk): Int = writeLock.withLock {
+        require(from != to) { "carryOver 來源與目標相同" }
+        val source = loadIfAbsent(from).toSet()
+        if (source.isEmpty()) return 0
+        val target = loadIfAbsent(to)
+        val before = target.size
+        target.addAll(source)
+        val added = target.size - before
+        if (added > 0) {
+            try {
+                persist(to, target)
+            } catch (e: Exception) {
+                pendingFlush.add(to)
+                throw e
+            }
+        }
+        added
+    }
+
+    /** 診斷用:該(區塊, epoch)目前的 dirty 座標數。 */
+    fun count(chunk: EpochedChunk): Int = loadIfAbsent(chunk).size
+
     private fun loadIfAbsent(chunk: EpochedChunk): MutableSet<LocalPos> =
         loaded.getOrPut(chunk) { ConcurrentHashMap.newKeySet<LocalPos>().apply { addAll(queryPositions(chunk)) } }
 

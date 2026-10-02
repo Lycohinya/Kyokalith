@@ -147,4 +147,30 @@ class EligiblePlacedOreStoreTest {
             file.deleteIfExists()
         }
     }
+
+    @Test
+    fun `inChunk forgetInMemory and deletePersisted drop only the chosen tokens`() {
+        val file = createTempFile(suffix = ".db")
+        try {
+            val db = KyokalithDatabase(file.toFile())
+            db.init()
+            val store = EligiblePlacedOreStore(db)
+            val a = sample(x = 18, z = 40) // chunk (1, 2)
+            val b = sample(x = 20, z = 41) // chunk (1, 2)
+            val other = sample(x = 100, z = 100)
+            listOf(a, b, other).forEach(store::insert)
+
+            assertEquals(setOf(a, b), store.inChunk("world", 1, 2).toSet())
+            assertEquals(true, store.forgetInMemory(a))
+            store.deletePersisted(listOf(a))
+
+            assertNull(store.find("world", a.x, a.y, a.z))
+            val reloaded = EligiblePlacedOreStore(db).apply { loadAll() }
+            assertNull(reloaded.find("world", a.x, a.y, a.z))
+            assertEquals(b, reloaded.find("world", b.x, b.y, b.z))
+            assertEquals(other, reloaded.find("world", other.x, other.y, other.z))
+        } finally {
+            file.deleteIfExists()
+        }
+    }
 }
