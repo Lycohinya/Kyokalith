@@ -107,6 +107,7 @@ class NoharaBridge(private val plugin: KyokalithPlugin) : Listener {
         accessors = acc
         registeredEventClass = eventClass
         registered = listener
+        plugin.logger.info("KYOKALITH_NOHARA_BRIDGE registered: listening to NoharaChunkRestoredEvent")
         return true
     }
 
@@ -121,9 +122,8 @@ class NoharaBridge(private val plugin: KyokalithPlugin) : Listener {
     @EventHandler
     fun onPluginEnable(event: PluginEnableEvent) {
         if (event.plugin.name != NOHARA) return
-        val ok = register()
-        if (ok) plugin.logger.info("KYOKALITH_NOHARA_BRIDGE registered: listening to NoharaChunkRestoredEvent")
-        else plugin.logger.severe("KYOKALITH_NOHARA_BRIDGE NOT registered although Nohara is enabled; Nohara will refuse writes (INTEGRATION_MISSING)")
+        // 成功時 register() 自己會印 KYOKALITH_NOHARA_BRIDGE registered(onEnable 與 Nohara 啟用兩條路徑共用)
+        if (!register()) plugin.logger.severe("KYOKALITH_NOHARA_BRIDGE NOT registered although Nohara is enabled; Nohara will refuse writes (INTEGRATION_MISSING)")
     }
 
     @EventHandler
