@@ -1,5 +1,8 @@
 # Kyokalith developer reference
 
+> Lycohinya deployment decision: NatureRevive is permanently retired and must not be installed or used as a fallback. Its legacy adapter/softdepend remains compatibility code only. The production restoration owner is Nohara; the Nohara bridge preserves dirty flags for retained player blocks. See the current restoration contract and Action: https://www.notion.so/3ed72084219f8146b449c99ed6341e1b .
+
+
 [繁體中文](API.zh-TW.md)
 
 Kyokalith exposes exactly **one** integration point: `OreCheckTriggerEvent`. No `ServicesManager` registration, no `-api` artifact, no interface layer — deliberately. There is only one thing to hook, so it uses Bukkit's native event mechanism.
@@ -121,7 +124,7 @@ f(salt, world, epoch, oreType, cellX, cellY, cellZ) -> hit / miss
 - **Idempotent**: same inputs, same output, forever. That's why `/kyo resolve` is safe to re-run — if you suspect a coordinate missed its event, re-run it and the result is guaranteed identical to "what should have happened".
 - **`salt` decouples real ore from the world seed**: seed-map sites can compute where vanilla ore generated, but not where Kyokalith's ore is.
 
-**`epoch`**: a per-chunk counter. When a chunk is regenerated (NatureRevive), `epoch += 1` — re-rolling `f` **for that chunk only**, leaving the rest of the world alone.
+**`epoch`**: a per-chunk counter. When a chunk is restored through Nohara, `epoch += 1` — re-rolling `f` **for that chunk only**, leaving the rest of the world alone.
 
 **Cell cache**: bounded LRU, 20,000 entries; the key includes `epoch`, so entries for regenerated chunks age out naturally — no invalidation sweeps. Cache misses cost nothing correctness-wise (pure function, just recompute).
 
@@ -183,7 +186,7 @@ materialized_positions(world, cx, cz, epoch, lx, y, lz, ore_type, vein_id, mater
                        PRIMARY KEY(world, cx, cz, epoch, lx, y, lz))
   -- derived lock cache for accepted same-vein hits and bounded visible-ore keep/stop plans;
   -- never stores ordinary misses
-  -- Cleared per-chunk on NatureRevive regeneration, same as dirty_positions.
+  -- Nohara invalidates this old-epoch cache; retained player dirty flags are carried forward.
 ```
 
 The generation algorithm has a separate metadata version. On first startup of v1.3.3, any database without `vein_algorithm_version = 3` deletes **only** `materialized_positions`, then records version 3 in the same transaction. This invalidates sparse v2 locks before 8³ cells and one-shot continuation plans take effect, without changing `salt`, chunk epochs, dirty positions, eligible placed ores, suspended chunks, or other metadata.
@@ -226,37 +229,9 @@ The only remaining brute-force scans are `/kyo preview` and `/kyo sample` — ad
 
 ---
 
-## NatureRevive bridge
+## Nohara restoration bridge
 
-Loads `engineer.skyouo.plugins.naturerevive.spigot.events.ChunkRegenEvent` via reflection, registered at `MONITOR`. On chunk regeneration:
-
-```
-suspend the chunk → epoch += 1 → drop old-epoch dirty positions
-                 → drop the chunk's eligible records → lift suspension
-```
-
-No re-scan needed: regeneration itself puts vanilla ore back = a fresh layer of decoys, and `epoch + 1` re-rolls `f` for that chunk only.
-
-**If the bridge throws, the chunk is deliberately left suspended** (fail-closed) — better a chunk that never materializes than one operating on inconsistent state.
-
----
-
-## Nohara bridge
-
-Loads `com.tinyyana.nohara.api.NoharaChunkRestoredEvent` via reflection, registered at `MONITOR` (not listed in `softdepend` on purpose, it would close a load-order cycle through LycohinyaCore; Nohara always enables later, so the bridge registers on Nohara's `PluginEnableEvent` using Nohara's own class loader, and re-registers if Nohara is reloaded; without Nohara the bridge stays inactive and nothing else changes). Nohara refuses to write while Kyokalith is enabled but not listening, so this bridge is what unlocks restores. Event kinds `RESTORED` and `ROLLED_BACK` are handled identically. The event arrives on the chunk's owner region thread; the handler touches memory only and queues the rest on one dedicated worker thread (the only place SQLite is used):
-
-```
-region thread: drop placed tokens whose block no longer matches (memory) → queue job
-worker:        carry dirty positions old epoch → epoch+1 (persisted)
-               → epoch += 1 → carry again (late marks) → drop old-epoch dirty rows
-               → drop old-epoch materialized locks → delete stale token rows
-```
-
-Unlike a NatureRevive regeneration, Nohara rewrites only cells that differ from the donor and were not touched by players afterwards, so **dirty positions are carried over, not dropped**: a player-refilled hole that Nohara left alone is still a player block. The cost is that a dirty flag can outlive the cell it described (never the other way round). Locks are dropped so a vein revealed before the restore is not reproduced at the same coordinates. No chunk is scanned.
-
-Every persistence step is ordered so a crash leaves only unreferenced old rows. **If any step fails, the chunk is left suspended** (logged as `KYOKALITH_NOHARA_INVALIDATE_FAILED`; lift it with `/kyo resume <cx> <cz>` after checking). Between the event and the end of the worker job (milliseconds) exposures still resolve against the old epoch; locks written then are discarded with the old epoch.
-
----
+NoharaBridge consumes NoharaChunkRestoredEvent (RESTORED / ROLLED_BACK). Capture on the owning region and persist on the background writer: bump epoch, invalidate materialized decisions, carry dirty flags for retained player blocks, preserve valid placed tokens and discard stale tokens. Failure suspends the chunk; no chunk scan. Offline reset requires recoverable sidecar reconciliation and does not invoke the loaded-Chunk event. The NatureRevive adapter is historical compatibility only.
 
 ## Known rough edges
 

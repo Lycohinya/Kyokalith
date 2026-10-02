@@ -1,5 +1,8 @@
 # Kyokalith
 
+> Lycohinya deployment decision: NatureRevive is permanently retired and must not be installed or used as a fallback. Its legacy adapter/softdepend remains compatibility code only. The production restoration owner is Nohara; the Nohara bridge preserves dirty flags for retained player blocks. See the current restoration contract and Action: https://www.notion.so/3ed72084219f8146b449c99ed6341e1b .
+
+
 [繁體中文](README.zh-TW.md)
 
 **Anti-X-Ray that never touches world generation.** Vanilla ores generate exactly as they always have — no packet obfuscation, no wiping-and-regenerating ores, no chunk scanning. Any ore fully enclosed by solid blocks is treated as a **decoy**: X-Ray, freecam, and seed-map tools all see it, but whether that block is *real* is only decided **the moment it is first exposed by mining**.

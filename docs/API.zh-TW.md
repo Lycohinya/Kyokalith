@@ -1,5 +1,8 @@
 # Kyokalith 開發者參考
 
+> Lycohinya 部署決策：NatureRevive 永久棄用，不得安裝或作備援；舊 adapter／softdepend 尚在 source 只屬相容殘留。野外還原 owner 為 Nohara，保留格的 dirty 不可清空。現行還原契約與 Action：https://www.notion.so/3ed72084219f8146b449c99ed6341e1b 。
+
+
 [English](API.md)
 
 Kyokalith 對外只有**一個**整合點:`OreCheckTriggerEvent`。沒有 `ServicesManager` 註冊、沒有 `-api` artifact、沒有介面層——刻意的。要接的東西只有一件,就用 Bukkit 原生的事件機制。
@@ -121,7 +124,7 @@ f(salt, world, epoch, oreType, cellX, cellY, cellZ) -> 命中/不命中
 - **冪等**:同樣的輸入永遠同樣的輸出。這就是 `/kyo resolve` 可以安全重跑的原因——你懷疑某個座標漏掉了事件,直接對它重跑一次,結果一定跟「當初應該發生的」一致。
 - **`salt` 讓真礦位置與世界種子脫鉤**:種子地圖網站算得出原版礦在哪,但算不出 Kyokalith 的礦在哪。
 
-**`epoch`**:每個區塊一個計數器。區塊被重生(NatureRevive)時 `epoch += 1`,等於**只對那個區塊**重骰 `f`,不影響世界其他地方。
+**`epoch`**:每個區塊一個計數器。區塊經 Nohara 還原時 `epoch += 1`,等於**只對那個區塊**重骰 `f`,不影響世界其他地方。
 
 **Cell 快取**:有界 LRU 20,000 筆,key 含 `epoch`,所以區塊重生後舊項目自然老化掉,不需要失效掃描。快取掉了對正確性沒有影響(純函數重算就好)。
 
@@ -181,7 +184,7 @@ suspended_chunks(world, cx, cz, reason, created_at, PRIMARY KEY(world, cx, cz))
 
 materialized_positions(world, cx, cz, epoch, lx, y, lz, ore_type, vein_id, material,
                        PRIMARY KEY(world, cx, cz, epoch, lx, y, lz))
-  -- 作為已接受同一 veinId 命中與有界裸礦 keep/stop 計畫的衍生鎖定快取;普通 miss 不寫入。NatureRevive 重生時
+  -- 作為已接受同一 veinId 命中與有界裸礦 keep/stop 計畫的衍生鎖定快取;普通 miss 不寫入。Nohara 還原時
   -- 逐 chunk 清除,做法與 dirty_positions 相同。
 ```
 
@@ -225,37 +228,9 @@ materialized_positions(world, cx, cz, epoch, lx, y, lz, ore_type, vein_id, mater
 
 ---
 
-## NatureRevive 橋接
+## Nohara 還原橋接
 
-反射載入 `engineer.skyouo.plugins.naturerevive.spigot.events.ChunkRegenEvent`,註冊在 `MONITOR`。區塊重生時:
-
-```
-暫停該區塊 → epoch += 1 → 丟掉舊 epoch 的 dirty 位置
-           → 丟掉該區塊的 eligible 紀錄 → 解除暫停
-```
-
-不需要重新掃描:重生本身就把原版礦放回去了 = 一層全新的誘餌,`epoch + 1` 只對那個區塊重骰 `f`。
-
-**橋接拋例外的話,區塊會被刻意留在暫停狀態**(fail-closed)——寧可那個區塊完全不材質化,也不要在不一致的狀態下運作。
-
----
-
-## Nohara 橋接
-
-反射載入 `com.tinyyana.nohara.api.NoharaChunkRestoredEvent`,註冊在 `MONITOR`(刻意不列進 `softdepend`:會經由 LycohinyaCore 形成載入順序的環;Nohara 一律較晚啟用,所以橋接在 Nohara 的 `PluginEnableEvent` 時用 Nohara 自己的 class loader 註冊,Nohara 重載時重新註冊;沒裝 Nohara 時橋接不啟用,其餘行為不變)。Nohara 在 Kyokalith 啟用卻沒監聽這個事件時拒絕寫入,所以這座橋就是還原的前提。`RESTORED` 與 `ROLLED_BACK` 處理方式相同。事件在該區塊的 owner region 執行緒上;handler 只碰記憶體,其餘排給一條專屬 worker 執行緒(唯一碰 SQLite 的地方):
-
-```
-region 執行緒:丟掉「那格已經不是 token 記的礦」的 placed token(記憶體)→ 排工作
-worker:        舊 epoch 的 dirty 位置搬到 epoch+1(落地)
-               → epoch += 1 → 再搬一次(補切換瞬間才標的)→ 刪舊 epoch 的 dirty 列
-               → 刪舊 epoch 的 materialized 鎖定 → 刪過期 token 的列
-```
-
-跟 NatureRevive 整塊再生不同,Nohara 只改寫「跟 donor 不同、且之後沒被玩家再動過」的格子,所以 **dirty 位置是搬走而不是丟掉**:玩家補回去的洞、Nohara 沒碰的格子,仍然是玩家方塊。代價是 dirty 旗標可能比它描述的格子活得久(不會相反)。鎖定一律作廢,還原前挖出來的礦脈不會在同座標原樣重現。全程不掃 chunk。
-
-每個持久化步驟的順序都讓崩潰只留下沒人引用的舊列。**任何一步失敗,該區塊會被留在暫停狀態**(log `KYOKALITH_NOHARA_INVALIDATE_FAILED`;確認後用 `/kyo resume <cx> <cz>` 解除)。事件到 worker 工作結束之間(毫秒級)曝露決算仍用舊 epoch;那時寫的鎖定會跟舊 epoch 一起被丟掉。
-
----
+NoharaBridge 消費 NoharaChunkRestoredEvent（RESTORED／ROLLED_BACK），owner 取資料、背景 writer 持久化：epoch +1、舊 materialized 鎖定失效；保留格 dirty 搬到新 epoch，有效 placed token 保留、失效 token 移除，失敗 suspend，不掃 chunk。離線 reset 需要可恢復 sidecar 對帳，不會觸發 loaded-Chunk 事件。NatureRevive adapter 只屬歷史相容程式。
 
 ## 已知的粗糙處
 

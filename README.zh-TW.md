@@ -1,5 +1,8 @@
 # Kyokalith
 
+> Lycohinya 部署決策：NatureRevive 永久棄用，不得安裝或作備援；舊 adapter／softdepend 尚在 source 只屬相容殘留。野外還原 owner 為 Nohara，保留格的 dirty 不可清空。現行還原契約與 Action：https://www.notion.so/3ed72084219f8146b449c99ed6341e1b 。
+
+
 [English](README.md)
 
 **不動世界生成的反 X-Ray 礦層。** 原版怎麼生就怎麼生,不混淆封包、不清礦重生、不掃區塊——被實心方塊完全包住的礦,一律當成**誘餌**:X-Ray / freecam / 種子地圖看得到,但那顆方塊的真假**要等它第一次被挖開露出來的瞬間才決定**。
